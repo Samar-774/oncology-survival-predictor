@@ -104,12 +104,3 @@ python precision_onlogy_xgb.py
 - **Visualization:** Matplotlib, Seaborn
 
 ---
-
-## 👤 My Contribution
-
-This was a group project. My contributions:
-- Data cleaning and preprocessing (`preprocess_clinical_data.py`)
-- SHAP explainability layer — global and local interpretability
-- Technical documentation and handover notes
-
----

@@ -1,0 +1,10 @@
+# Datasets
+data/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# VS Code
+.vscode/

@@ -2,11 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 import xgboost as xgb
 import shap
+import joblib
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -33,7 +32,7 @@ RECURRENCE_OPTIONS = ['Frontal lobe', 'None', 'Occipital lobe', 'Parietal lobe',
 # ─── Load & preprocess ───────────────────────────────────────────────
 @st.cache_data
 def load_and_preprocess():
-    df = pd.read_csv("brain_tumor_dataset.csv")
+    df = pd.read_csv("data/brain_tumor_augmented.csv")
     df = df.drop(columns=['Patient ID'])
 
     # Handle missing recurrence site
@@ -76,33 +75,17 @@ def load_and_preprocess():
     return df, histology_mapping, encoders, scaler, max_survival
 
 @st.cache_resource
-def train_models(_df):
-    class_target = "Histology_Encoded"
-    X_rf = _df.drop(columns=[class_target, "Survival_Rate"], errors="ignore")
-    y_class = _df[class_target]
-    y_surv = _df["Survival_Rate"]
-
-    # Train RF
-    X_train, _, y_train, _ = train_test_split(X_rf, y_class, test_size=0.2, random_state=42, stratify=y_class)
-    rf = RandomForestClassifier(n_estimators=100, max_depth=12, random_state=42, n_jobs=-1)
-    rf.fit(X_train, y_train)
-
-    # Add RF predictions for XGB stacking
-    df2 = _df.copy()
-    df2["Predicted_Histology"] = rf.predict(X_rf)
-    X_xgb = df2.drop(columns=["Survival_Rate", class_target], errors="ignore")
-
-    X_train2, _, y_train2, _ = train_test_split(X_xgb, y_surv, test_size=0.2, random_state=42)
-    xgb_model = xgb.XGBRegressor(n_estimators=300, max_depth=6, learning_rate=0.05,
-                                   subsample=0.8, colsample_bytree=0.8, random_state=42, verbosity=0)
-    xgb_model.fit(X_train2, y_train2)
-
-    return rf, xgb_model, list(X_rf.columns), list(X_xgb.columns)
+def load_models():
+    rf = joblib.load('models/rf_model.pkl')
+    xgb_model = joblib.load('models/xgb_model.pkl')
+    rf_features = joblib.load('models/rf_features.pkl')
+    xgb_features = joblib.load('models/xgb_features.pkl')
+    return rf, xgb_model, rf_features, xgb_features
 
 # ─── Load everything ─────────────────────────────────────────────────
-with st.spinner("Loading data and training models..."):
+with st.spinner("Loading data and models..."):
     df, histology_mapping, encoders, scaler, max_survival = load_and_preprocess()
-    rf, xgb_model, rf_features, xgb_features = train_models(df)
+    rf, xgb_model, rf_features, xgb_features = load_models()
 
 st.success("✅ Models ready! Fill in patient details below.")
 st.divider()
@@ -124,6 +107,24 @@ with col2:
     recurrence_site = st.selectbox("Recurrence Site (None if no recurrence)", RECURRENCE_OPTIONS)
     recurrence_time = st.slider("Time to Recurrence (months, 0 if none)", min_value=0, max_value=60, value=0)
 
+
+st.subheader("🧬 Genomic Mutation Status")
+st.caption("Select mutations present in the patient's tumor biopsy report")
+
+mut_col1, mut_col2, mut_col3 = st.columns(3)
+
+with mut_col1:
+    idh1 = st.toggle("IDH1 Mutated", value=False)
+    idh2 = st.toggle("IDH2 Mutated", value=False)
+
+with mut_col2:
+    tp53 = st.toggle("TP53 Mutated", value=False)
+    atrx = st.toggle("ATRX Mutated", value=False)
+
+with mut_col3:
+    pten = st.toggle("PTEN Mutated", value=False)
+    egfr = st.toggle("EGFR Mutated", value=False)
+
 st.divider()
 
 if st.button("🔬 Run Prediction", use_container_width=True):
@@ -144,8 +145,9 @@ if st.button("🔬 Run Prediction", use_container_width=True):
 
         # Build RF patient row (exact column order matters)
         patient_rf = pd.DataFrame([[
-            scaled_age, scaled_recurrence, stage_enc,
-            gender_enc, location_enc, treatment_enc, outcome_enc, recurrence_site_enc
+            scaled_age, scaled_recurrence,
+            int(idh1), int(tp53), int(atrx), int(pten), int(egfr), int(idh2),
+            stage_enc, gender_enc, location_enc, treatment_enc, outcome_enc, recurrence_site_enc
         ]], columns=rf_features)
 
         # RF prediction
@@ -174,9 +176,13 @@ if st.button("🔬 Run Prediction", use_container_width=True):
         else:
             patient_shap = shap_values[0]
 
-        top_idx = np.argmax(np.abs(patient_shap))
-        top_feature = rf_features[top_idx]
-        direction = "Positive" if patient_shap[top_idx] > 0 else "Negative"
+        # Use XGB SHAP for primary driver (survival is the main output)
+        xgb_explainer = shap.TreeExplainer(xgb_model)
+        xgb_shap_values = xgb_explainer.shap_values(patient_xgb)
+
+        top_idx = np.argmax(np.abs(xgb_shap_values[0]))
+        top_feature = xgb_features[top_idx]
+        direction = "Positive" if xgb_shap_values[0][top_idx] > 0 else "Negative"
         top_feature_clean = top_feature.replace('_Encoded', '').replace('_', ' ').title()
 
     # ─── Results ─────────────────────────────────────────────────
@@ -208,9 +214,9 @@ if st.button("🔬 Run Prediction", use_container_width=True):
     """)
 
     if direction == "Positive":
-        st.success(f"✅ **{top_feature_clean}** is acting as a **protective factor** for this patient.")
+        st.info(f"ℹ️ **{top_feature_clean}** pushed the classification **toward {tumor_type}**.")
     else:
-        st.warning(f"⚠️ **{top_feature_clean}** is acting as a **risk factor** for this patient.")
+        st.info(f"ℹ️ **{top_feature_clean}** pushed the classification **away from {tumor_type}**.")
 
     # SHAP bar chart
     st.divider()
@@ -235,6 +241,30 @@ if st.button("🔬 Run Prediction", use_container_width=True):
     plt.tight_layout()
     st.pyplot(fig)
     st.caption("🔴 Red = pushes toward this tumor type | 🔵 Blue = pushes away from this tumor type")
+
+    # XGB SHAP — Survival explanation
+    st.divider()
+    st.subheader("📈 Survival Prediction Drivers")
+    st.caption("How much each feature influenced the survival prediction specifically.")
+
+    xgb_clean_features = [f.replace('_Encoded','').replace('_',' ').title() for f in xgb_features]
+    xgb_shap_df = pd.DataFrame({
+        'Feature': xgb_clean_features,
+        'SHAP Value': xgb_shap_values[0]
+    }).sort_values('SHAP Value', key=abs, ascending=True)
+
+    xgb_colors = ['#27ae60' if v > 0 else '#e74c3c' for v in xgb_shap_df['SHAP Value']]
+
+    fig2, ax2 = plt.subplots(figsize=(8, 5))
+    ax2.barh(xgb_shap_df['Feature'], xgb_shap_df['SHAP Value'], color=xgb_colors)
+    ax2.axvline(x=0, color='black', linewidth=0.8)
+    ax2.set_xlabel('SHAP Value (impact on survival prediction)')
+    ax2.set_title('Survival Prediction — Feature Impact')
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+    plt.tight_layout()
+    st.pyplot(fig2)
+    st.caption("🟢 Green = increases survival | 🔴 Red = decreases survival")
 
     # Risk indicator
     st.divider()

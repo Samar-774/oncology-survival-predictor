@@ -57,8 +57,26 @@ df['Survival Time (months)'] = df['Survival Time (months)'] + (df['IDH1_Mutated'
 
 df['Survival Time (months)'] = df['Survival Time (months)'].clip(6, 72)
 
+age_adjustment = (df['Age'] - df['Age'].mean()) * -0.8
+df['Survival Time (months)'] = df['Survival Time (months)'] + age_adjustment
+df['Survival Time (months)'] = df['Survival Time (months)'].clip(6, 72)
+# Recurrence adjustment — no recurrence is better than early recurrence
+recurrence_adjustment = np.where(
+    df['Time to Recurrence (months)'].isna() | (df['Time to Recurrence (months)'] == 0), 5,  # no recurrence → +5
+    np.where(df['Time to Recurrence (months)'] < 12, -8,   # early recurrence → -8
+    np.where(df['Time to Recurrence (months)'] < 24, -4,   # mid recurrence → -4
+    2))                                                      # late recurrence → +2
+)
+df['Survival Time (months)'] = df['Survival Time (months)'] + recurrence_adjustment
+df['Survival Time (months)'] = df['Survival Time (months)'].clip(6, 72)
+
+# Grade adjustment — make grade impact stronger
+grade_adjustment = df['Tumor Grade'].map({'I': 8, 'II': 4, 'III': -4, 'IV': -12})
+df['Survival Time (months)'] = df['Survival Time (months)'] + grade_adjustment
+df['Survival Time (months)'] = df['Survival Time (months)'].clip(6, 72)
+
 # print(df['Survival Time (months)'].describe())
 
 df.to_csv('data/brain_tumor_augmented.csv', index=False)
 
-print('Operstion succesful')
+print('Operation succesful')

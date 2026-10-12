@@ -49,7 +49,7 @@ def load_models():
 
 # ─── Load everything ─────────────────────────────────────────────────
 with st.spinner("Loading data and models..."):
-    df, histology_mapping, encoders, scaler, max_survival = load_artifacts()
+    encoders, scaler, histology_mapping, max_survival = load_artifacts()
     rf, xgb_model, rf_features, xgb_features = load_models()
 
 st.success("✅ Models ready! Fill in patient details below.")

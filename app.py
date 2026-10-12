@@ -30,49 +30,14 @@ OUTCOME_OPTIONS = ['Complete response', 'Partial response', 'Progressive disease
 RECURRENCE_OPTIONS = ['Frontal lobe', 'None', 'Occipital lobe', 'Parietal lobe', 'Temporal lobe']
 
 # ─── Load & preprocess ───────────────────────────────────────────────
-@st.cache_data
-def load_and_preprocess():
-    df = pd.read_csv("data/brain_tumor_augmented.csv")
-    df = df.drop(columns=['Patient ID'])
+@st.cache_resource
+def load_artifacts():
+    encoders = joblib.load('models/encoders.pkl')
+    scaler = joblib.load('models/scaler.pkl')
+    histology_mapping = joblib.load('models/histology_mapping.pkl')
+    max_survival = joblib.load('models/max_survival.pkl')
+    return encoders, scaler, histology_mapping, max_survival
 
-    # Handle missing recurrence site
-    df['Recurrence Site'] = df['Recurrence Site'].fillna('None')
-
-    # Target 1: Histology classification
-    histology_encoder = LabelEncoder()
-    df['Histology_Encoded'] = histology_encoder.fit_transform(df['Tumor Type'])
-    histology_mapping = dict(enumerate(histology_encoder.classes_))
-    df = df.drop(columns=['Tumor Type'])
-
-    # Target 2: Survival in months (keep raw, not normalized)
-    max_survival = df['Survival Time (months)'].max()
-    df['Survival_Rate'] = (df['Survival Time (months)'] / max_survival) * 100
-    df = df.drop(columns=['Survival Time (months)'])
-
-    # Stage encoding - dataset uses 'I','II','III','IV' without Grade prefix
-    df['Stage_Encoded'] = df['Tumor Grade'].map(GRADE_MAP).fillna(0).astype(int)
-    df = df.drop(columns=['Tumor Grade'])
-
-    # Categorical encoding
-    categorical_columns = ['Gender', 'Tumor Location', 'Treatment', 'Treatment Outcome', 'Recurrence Site']
-    encoders = {}
-    for col in categorical_columns:
-        if col in df.columns:
-            le = LabelEncoder()
-            df[f'{col.replace(" ", "_")}_Encoded'] = le.fit_transform(df[col].astype(str))
-            encoders[col] = le
-            df = df.drop(columns=[col])
-
-    # Fill missing recurrence time
-    if 'Time to Recurrence (months)' in df.columns:
-        df['Time to Recurrence (months)'] = df['Time to Recurrence (months)'].fillna(0)
-
-    # Scale numerical columns — fit scaler and return it
-    numerical_columns = ['Age', 'Time to Recurrence (months)']
-    scaler = StandardScaler()
-    df[numerical_columns] = scaler.fit_transform(df[numerical_columns])
-
-    return df, histology_mapping, encoders, scaler, max_survival
 
 @st.cache_resource
 def load_models():
@@ -84,7 +49,7 @@ def load_models():
 
 # ─── Load everything ─────────────────────────────────────────────────
 with st.spinner("Loading data and models..."):
-    df, histology_mapping, encoders, scaler, max_survival = load_and_preprocess()
+    df, histology_mapping, encoders, scaler, max_survival = load_artifacts()
     rf, xgb_model, rf_features, xgb_features = load_models()
 
 st.success("✅ Models ready! Fill in patient details below.")

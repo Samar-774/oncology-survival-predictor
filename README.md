@@ -22,7 +22,7 @@ Given a patient's clinical and genomic data, the engine:
 ```
 brain_tumor_dataset.csv
         ↓
-augment_dataset.py          → adds TCGA-derived mutation features + survival adjustments
+augment_dataset.py               → adds TCGA-derived mutation features + survival adjustments
         ↓
 brain_tumor_augmented.csv
         ↓
@@ -70,15 +70,18 @@ Mutation features (IDH1, IDH2, TP53, ATRX, PTEN, EGFR) were added using real TCG
 
 | Model | Task | Metric | Score |
 |---|---|---|---|
-| Random Forest | Histology Classification | Accuracy | 99% |
-| XGBoost | Survival Prediction | R² | 0.813 |
-| XGBoost | Survival Prediction | RMSE | 5.25% |
+| Random Forest | Histology Classification | Accuracy | 99.75% |
+| XGBoost | Survival Prediction | R² | 0.954 |
+| XGBoost | Survival Prediction | RMSE | 5.46% |
+| XGBoost | Survival Prediction | MAE | 3.21% |
 
 ### Stacked Architecture Advantage
 | Approach | RMSE |
 |---|---|
-| Clinical features only | 6.07% |
-| Stacked (with RF output) | 5.25% |
+| Clinical features only | 5.82% |
+| Stacked (with RF output) | 5.46% |
+
+The 2-stage stacked pipeline reduces RMSE by **0.36 percentage points** over a baseline clinical-only model.
 
 ---
 
@@ -100,23 +103,37 @@ Patient: 35 year old, Grade II, IDH1 mutated
 
 ---
 
+## 📈 SHAP Visualizations
+
+| Plot | Description |
+|---|---|
+| `plots/confusion_matrix_histology.png` | RF classification accuracy per tumor type |
+| `plots/shap_beeswarm_survival.png` | Global feature importance for survival prediction |
+| `plots/shap_waterfall_high_risk.png` | SHAP explanation for highest risk patient |
+| `plots/shap_waterfall_low_risk.png` | SHAP explanation for lowest risk patient |
+
+---
+
 ## 🚀 How to Run Locally
 
 ```bash
-# Step 1 — Augment dataset
+# Step 1 — Augment dataset with TCGA mutation features
 python augment_dataset.py
 
-# Step 2 — Preprocess
+# Step 2 — Preprocess augmented data
 python src/preprocess_clinical_data.py
 
-# Step 3 — Train models
+# Step 3 — Train and save models
 python src/precision_onlogy_rf.py
 python src/precision_onlogy_xgb.py
 
-# Step 4 — Save artifacts
+# Step 4 — Save encoders and artifacts
 python save_artifacts.py
 
-# Step 5 — Launch app
+# Step 5 — (Optional) Evaluate models and generate SHAP plots
+python src/evaluate_models.py
+
+# Step 6 — Launch app
 streamlit run app.py
 ```
 
@@ -127,7 +144,7 @@ streamlit run app.py
 - **ML Models:** Scikit-learn (Random Forest), XGBoost
 - **Explainability:** SHAP
 - **Data Processing:** Pandas, NumPy
-- **Visualization:** Matplotlib
+- **Visualization:** Matplotlib, Seaborn
 - **Frontend:** Streamlit
 - **Deployment:** Streamlit Cloud
 - **Model Serialization:** Joblib

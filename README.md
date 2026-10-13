@@ -167,7 +167,7 @@ oncology-survival-predictor/
 ├── save_artifacts.py
 ├── app.py
 ├── requirements.txt
-└── README.md
+|── README.md
 ├── pipeline.py                    # Prediction logic called by app.py
 ```
 

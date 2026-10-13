@@ -168,6 +168,7 @@ oncology-survival-predictor/
 ├── app.py
 ├── requirements.txt
 └── README.md
+├── pipeline.py                    # Prediction logic called by app.py
 ```
 
 ---

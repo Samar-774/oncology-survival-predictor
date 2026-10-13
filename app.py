@@ -2,12 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-import xgboost as xgb
-import shap
 import joblib
+import shap
 import warnings
 warnings.filterwarnings('ignore')
+
+from pipeline import predict_patient
 
 st.set_page_config(page_title="Oncology Survival Predictor", page_icon="🧠", layout="centered")
 
@@ -15,10 +15,7 @@ st.title("🧠 Oncology Survival Predictor")
 st.markdown("A clinical ML pipeline for **brain tumor classification** and **survival prediction**, powered by Explainable AI (SHAP).")
 st.divider()
 
-# ─── Constants (matching dataset exactly) ────────────────────────────
-GRADE_MAP = {'I': 1, 'II': 2, 'III': 3, 'IV': 4}
-TUMOR_TYPES = {0: 'Astrocytoma', 1: 'Glioblastoma', 2: 'Meningioma'}
-
+# ─── Constants ───────────────────────────────────────────────────────
 GENDER_OPTIONS = ['Female', 'Male']
 LOCATION_OPTIONS = ['Frontal lobe', 'Occipital lobe', 'Parietal lobe', 'Temporal lobe']
 TREATMENT_OPTIONS = [
@@ -29,7 +26,7 @@ TREATMENT_OPTIONS = [
 OUTCOME_OPTIONS = ['Complete response', 'Partial response', 'Progressive disease', 'Stable disease']
 RECURRENCE_OPTIONS = ['Frontal lobe', 'None', 'Occipital lobe', 'Parietal lobe', 'Temporal lobe']
 
-# ─── Load & preprocess ───────────────────────────────────────────────
+# ─── Load artifacts for encoders/scaler (needed for form validation) ─
 @st.cache_resource
 def load_artifacts():
     encoders = joblib.load('models/encoders.pkl')
@@ -38,19 +35,8 @@ def load_artifacts():
     max_survival = joblib.load('models/max_survival.pkl')
     return encoders, scaler, histology_mapping, max_survival
 
-
-@st.cache_resource
-def load_models():
-    rf = joblib.load('models/rf_model.pkl')
-    xgb_model = joblib.load('models/xgb_model.pkl')
-    rf_features = joblib.load('models/rf_features.pkl')
-    xgb_features = joblib.load('models/xgb_features.pkl')
-    return rf, xgb_model, rf_features, xgb_features
-
-# ─── Load everything ─────────────────────────────────────────────────
-with st.spinner("Loading data and models..."):
+with st.spinner("Loading models..."):
     encoders, scaler, histology_mapping, max_survival = load_artifacts()
-    rf, xgb_model, rf_features, xgb_features = load_models()
 
 st.success("✅ Models ready! Fill in patient details below.")
 st.divider()
@@ -71,7 +57,6 @@ with col2:
     treatment_outcome = st.selectbox("Treatment Outcome", OUTCOME_OPTIONS)
     recurrence_site = st.selectbox("Recurrence Site (None if no recurrence)", RECURRENCE_OPTIONS)
     recurrence_time = st.slider("Time to Recurrence (months, 0 if none)", min_value=0, max_value=60, value=0)
-
 
 st.subheader("🧬 Genomic Mutation Status")
 st.caption("Select mutations present in the patient's tumor biopsy report")
@@ -94,136 +79,80 @@ st.divider()
 
 if st.button("🔬 Run Prediction", use_container_width=True):
     with st.spinner("Running prediction..."):
-
-        # Scale age and recurrence time using the SAME scaler fit on training data
-        scaled_vals = scaler.transform([[age, recurrence_time]])[0]
-        scaled_age = scaled_vals[0]
-        scaled_recurrence = scaled_vals[1]
-
-        # Encode categorical inputs
-        gender_enc = encoders['Gender'].transform([gender])[0]
-        location_enc = encoders['Tumor Location'].transform([tumor_location])[0]
-        treatment_enc = encoders['Treatment'].transform([treatment])[0]
-        outcome_enc = encoders['Treatment Outcome'].transform([treatment_outcome])[0]
-        recurrence_site_enc = encoders['Recurrence Site'].transform([recurrence_site])[0]
-        stage_enc = GRADE_MAP[tumor_grade]
-
-        # Build RF patient row (exact column order matters)
-        patient_rf = pd.DataFrame([[
-            scaled_age, scaled_recurrence,
-            int(idh1), int(tp53), int(atrx), int(pten), int(egfr), int(idh2),
-            stage_enc, gender_enc, location_enc, treatment_enc, outcome_enc, recurrence_site_enc
-        ]], columns=rf_features)
-
-        # RF prediction
-        predicted_class = rf.predict(patient_rf)[0]
-        tumor_type = histology_mapping[predicted_class]
-        predicted_proba = rf.predict_proba(patient_rf)[0]
-
-        # XGB patient row (includes predicted histology)
-        patient_xgb = patient_rf.copy()
-        patient_xgb['Predicted_Histology'] = predicted_class
-        patient_xgb = patient_xgb[xgb_features]
-
-        # XGB survival prediction
-        survival_rate = xgb_model.predict(patient_xgb)[0]
-        survival_months = (np.clip(survival_rate, 0, 100) / 100) * max_survival
-
-        # SHAP for RF
-        explainer = shap.TreeExplainer(rf)
-        shap_values = explainer.shap_values(patient_rf)
-
-        # Handle both 3D and list formats
-        if isinstance(shap_values, list):
-            patient_shap = shap_values[int(predicted_class)][0]
-        elif shap_values.ndim == 3:
-            patient_shap = shap_values[0, :, int(predicted_class)]
-        else:
-            patient_shap = shap_values[0]
-
-        # Use XGB SHAP for primary driver (survival is the main output)
-        xgb_explainer = shap.TreeExplainer(xgb_model)
-        xgb_shap_values = xgb_explainer.shap_values(patient_xgb)
-
-        top_idx = np.argmax(np.abs(xgb_shap_values[0]))
-        top_feature = xgb_features[top_idx]
-        direction = "Positive" if xgb_shap_values[0][top_idx] > 0 else "Negative"
-        top_feature_clean = top_feature.replace('_Encoded', '').replace('_', ' ').title()
+        result = predict_patient(
+            age, gender, tumor_grade, tumor_location,
+            treatment, treatment_outcome, recurrence_site,
+            recurrence_time, idh1, idh2, tp53, atrx, pten, egfr
+        )
 
     # ─── Results ─────────────────────────────────────────────────
     st.subheader("📊 Prediction Results")
 
     r1, r2, r3 = st.columns(3)
-    r1.metric("🧬 Tumor Type", tumor_type)
-    r2.metric("📅 Survival Horizon", f"{survival_months:.1f} months")
-    r3.metric("🔍 Primary Driver", top_feature_clean)
+    r1.metric("🧬 Tumor Type", result['tumor_type'])
+    r2.metric("📅 Survival Horizon", f"{result['survival_months']:.1f} months")
+    r3.metric("🔍 Primary Driver", result['top_feature'])
 
     st.divider()
 
     # Confidence breakdown
     st.subheader("🎯 Classification Confidence")
     conf_df = pd.DataFrame({
-        'Tumor Type': list(histology_mapping.values()),
-        'Confidence': [f"{p*100:.1f}%" for p in predicted_proba]
+        'Tumor Type': list(result['histology_mapping'].values()),
+        'Confidence': [f"{p*100:.1f}%" for p in result['predicted_proba']]
     })
     st.dataframe(conf_df, hide_index=True, use_container_width=True)
 
     st.divider()
 
-    # SHAP explanation
+    # SHAP explanation text
     st.subheader("🧠 SHAP Explanation")
     st.markdown(f"""
-> **For this patient**, the model predicts **{tumor_type}** with an estimated survival horizon of **{survival_months:.1f} months**.
+> **For this patient**, the model predicts **{result['tumor_type']}** with an estimated survival horizon of **{result['survival_months']:.1f} months**.
 >
-> The primary driver behind this prediction is **{top_feature_clean}**, which has a **{direction.lower()} influence** on the outcome.
+> The primary survival driver is **{result['top_feature']}**, which has a **{result['direction'].lower()} influence** on survival.
     """)
+    st.info(f"ℹ️ **{result['top_feature']}** {'increases' if result['direction'] == 'Positive' else 'decreases'} predicted survival for this patient.")
 
-    if direction == "Positive":
-        st.info(f"ℹ️ **{top_feature_clean}** pushed the classification **toward {tumor_type}**.")
-    else:
-        st.info(f"ℹ️ **{top_feature_clean}** pushed the classification **away from {tumor_type}**.")
-
-    # SHAP bar chart
+    # RF SHAP bar chart
     st.divider()
-    st.subheader("📊 SHAP Feature Impact")
-    st.caption("How much each feature pushed the prediction — positive = toward this tumor type, negative = away from it.")
+    st.subheader("📊 Tumor Classification — Feature Impact")
+    st.caption("How much each feature pushed the tumor type prediction.")
 
-    clean_features = [f.replace('_Encoded','').replace('_',' ').title() for f in rf_features]
-    shap_df = pd.DataFrame({
-        'Feature': clean_features,
-        'SHAP Value': patient_shap
+    clean_rf_features = [f.replace('_Encoded','').replace('_',' ').title() for f in result['rf_features']]
+    rf_shap_df = pd.DataFrame({
+        'Feature': clean_rf_features,
+        'SHAP Value': result['rf_shap']
     }).sort_values('SHAP Value', key=abs, ascending=True)
 
-    colors = ['#e74c3c' if v > 0 else '#3498db' for v in shap_df['SHAP Value']]
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-    bars = ax.barh(shap_df['Feature'], shap_df['SHAP Value'], color=colors)
-    ax.axvline(x=0, color='black', linewidth=0.8)
-    ax.set_xlabel('SHAP Value (impact on prediction)')
-    ax.set_title(f'Feature Impact for Predicted Class: {tumor_type}')
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
+    rf_colors = ['#e74c3c' if v > 0 else '#3498db' for v in rf_shap_df['SHAP Value']]
+    fig1, ax1 = plt.subplots(figsize=(8, 4))
+    ax1.barh(rf_shap_df['Feature'], rf_shap_df['SHAP Value'], color=rf_colors)
+    ax1.axvline(x=0, color='black', linewidth=0.8)
+    ax1.set_xlabel('SHAP Value (impact on classification)')
+    ax1.set_title(f'Feature Impact for Predicted Class: {result["tumor_type"]}')
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
     plt.tight_layout()
-    st.pyplot(fig)
-    st.caption("🔴 Red = pushes toward this tumor type | 🔵 Blue = pushes away from this tumor type")
+    st.pyplot(fig1)
+    st.caption("🔴 Red = pushes toward this tumor type | 🔵 Blue = pushes away")
 
-    # XGB SHAP — Survival explanation
+    # XGB SHAP bar chart
     st.divider()
-    st.subheader("📈 Survival Prediction Drivers")
-    st.caption("How much each feature influenced the survival prediction specifically.")
+    st.subheader("📈 Survival Prediction — Feature Impact")
+    st.caption("How much each feature influenced the survival prediction.")
 
-    xgb_clean_features = [f.replace('_Encoded','').replace('_',' ').title() for f in xgb_features]
+    clean_xgb_features = [f.replace('_Encoded','').replace('_',' ').title() for f in result['xgb_features']]
     xgb_shap_df = pd.DataFrame({
-        'Feature': xgb_clean_features,
-        'SHAP Value': xgb_shap_values[0]
+        'Feature': clean_xgb_features,
+        'SHAP Value': result['xgb_shap']
     }).sort_values('SHAP Value', key=abs, ascending=True)
 
     xgb_colors = ['#27ae60' if v > 0 else '#e74c3c' for v in xgb_shap_df['SHAP Value']]
-
     fig2, ax2 = plt.subplots(figsize=(8, 5))
     ax2.barh(xgb_shap_df['Feature'], xgb_shap_df['SHAP Value'], color=xgb_colors)
     ax2.axvline(x=0, color='black', linewidth=0.8)
-    ax2.set_xlabel('SHAP Value (impact on survival prediction)')
+    ax2.set_xlabel('SHAP Value (impact on survival)')
     ax2.set_title('Survival Prediction — Feature Impact')
     ax2.spines['top'].set_visible(False)
     ax2.spines['right'].set_visible(False)
@@ -231,15 +160,15 @@ if st.button("🔬 Run Prediction", use_container_width=True):
     st.pyplot(fig2)
     st.caption("🟢 Green = increases survival | 🔴 Red = decreases survival")
 
-    # Risk indicator
+    # Risk assessment
     st.divider()
     st.subheader("⚠️ Risk Assessment")
-    if survival_months < 20:
-        st.error(f"🔴 High Risk — Predicted survival of {survival_months:.1f} months. Aggressive intervention recommended.")
-    elif survival_months < 36:
-        st.warning(f"🟡 Moderate Risk — Predicted survival of {survival_months:.1f} months. Close monitoring advised.")
+    if result['risk'] == "High":
+        st.error(f"🔴 High Risk — Predicted survival of {result['survival_months']:.1f} months. Aggressive intervention recommended.")
+    elif result['risk'] == "Moderate":
+        st.warning(f"🟡 Moderate Risk — Predicted survival of {result['survival_months']:.1f} months. Close monitoring advised.")
     else:
-        st.success(f"🟢 Lower Risk — Predicted survival of {survival_months:.1f} months. Standard care protocol.")
+        st.success(f"🟢 Lower Risk — Predicted survival of {result['survival_months']:.1f} months. Standard care protocol.")
 
 st.divider()
 st.caption("Built with Scikit-learn · XGBoost · SHAP · Streamlit | Data: Brain Tumor Clinical Dataset")
